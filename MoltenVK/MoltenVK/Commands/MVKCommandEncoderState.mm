@@ -467,6 +467,20 @@ static void executeBindOp(id<MTLCommandEncoder> encoder,
 	MVKDevice* dev = mvkEncoder.getDevice();
 	if (Op == MVKDescriptorBindOperationCode::UseAccelerationStructureWithLiveCheck && dev->hasResidencySet())
 		return;
+	if constexpr (Op == MVKDescriptorBindOperationCode::BindAccelerationStructure ||
+				  Op == MVKDescriptorBindOperationCode::UseAccelerationStructureWithLiveCheck) {
+		// A TLAS only references its BLASes by address, so Metal isn't told that they must be resident
+		// for this encoder. Without this, BLAS storage can be evicted and rays begin missing.
+		// The instances are the native BLASes of every GPU-addressable AS (cached per command buffer
+		// and invalidated whenever an AS is built or copied), so the same list the ray-tracing
+		// dispatch and the AS build encoders use also covers ray queries.
+		if (!dev->hasResidencySet()) {
+			auto& useResource = mvkEncoder.getState().mtlShared()._useResource;
+			const auto& blases = mvkEncoder.getAccelerationStructureInstances();
+			for (size_t blasIdx = 0; blasIdx < blases.size(); blasIdx++)
+				useResource.addImmediate(blases[blasIdx], encoder, binder.useResource, useResourceStage, false);
+		}
+	}
 	for (uint32_t i = 0; i < count; i++, src += stride) {
 		id resource = nil;
 		if constexpr (Op != MVKDescriptorBindOperationCode::BindAccelerationStructure &&
